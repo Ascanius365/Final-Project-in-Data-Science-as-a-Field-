@@ -1,0 +1,299 @@
+---
+title: "Analyzing the CFR from Italy in the first two COVID-19 waves"
+date: "2026-05-18"
+output: pdf_document
+---
+
+## Introduction
+
+In this analysis the database of the Johns Hopkins University CSSE is used to calculate the Case Fatality Rate, CFR of different countries and is showed in a line graph to see the progression. The focus is on Italy, because it has a distinctive arch in the first two Covid 19 waves. Maybe this arch was caused by a shortage of tests or the health system had a capacity overload.
+
+Than this first 2 waves are further investigated and countries who also had a high CFR are illustrated to be able to explore a pattern what went wrong in this phase.
+
+There is a lot of noise in the database because of reporting delay or missing data. To be able to estimate data points a Fourier transform is conducted in the end. Here we want to create an idealized graph that is a approximation to the real graph.
+
+```{r}
+library(lubridate)
+library(tidyverse)
+
+# Loading the database 'Johns Hopkins University CSSE'
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- c("time_series_covid19_confirmed_global.csv",  "time_series_covid19_deaths_global.csv")
+urls <- str_c(url_in,file_names)
+
+global_cases <- read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+```
+
+```{r}
+global_cases <- global_cases %>%
+  # The database is formed in an long-format
+  pivot_longer(cols = -c(`Province/State`, `Country/Region`, Lat, Long),
+               names_to = "date", values_to = "cases") %>%
+  # Convert the text in a date format
+  mutate(date = mdy(date)) %>%
+  # Summarize at a country level
+  group_by(`Country/Region`, date) %>%
+  summarise(cases = sum(cases, na.rm = TRUE), .groups = "drop")
+```
+
+```{r}
+global_deaths <- global_deaths %>%
+  # The database is formed in an long-format
+  pivot_longer(cols = -c(`Province/State`, `Country/Region`, Lat, Long),
+               names_to = "date", values_to = "cases") %>%
+  # Convert the text in a date format
+  mutate(date = mdy(date)) %>%
+  # Summarize at a country level
+  group_by(`Country/Region`, date) %>%
+  summarise(cases = sum(cases, na.rm = TRUE), .groups = "drop")
+```
+
+```{r}
+# Here we join the two datasets for each country and date
+covid_combined <- full_join(global_cases, global_deaths, by = c("Country/Region", "date"))
+```
+
+```{r}
+covid_cfr <- covid_combined %>%
+  rename(
+    Country = `Country/Region`,
+    confirmed = cases.x,
+    deaths = cases.y
+  ) %>%
+  # We just use data points where are a minimum of 1000 cases to reduce the distortion at the beginning of the pandemic. 
+  filter(confirmed >= 1000) %>%
+  # Now we calculate the CFR.
+  mutate(cfr = (deaths / confirmed) * 100)
+```
+
+## Course of the Case fatality rate (CFR)
+
+```{r}
+# We choose some interesting countries for the survey. 
+countries_to_plot <- c("Germany", "Italy", "US", "Brazil", "South Africa")
+
+plot_trend <- covid_cfr %>%
+  filter(Country %in% countries_to_plot) %>%
+  ggplot(aes(x = date, y = cfr, color = Country)) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "Course of the Case fatality rate (CFR) over time",
+    subtitle = "Data points with a minimum of 1000 cases",
+    x = "date",
+    y = "CFR (%)",
+    color = "Country",
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 16)
+  )
+
+print(plot_trend)
+```
+
+Between the beginning and 2021 one can see a variation of curves. Some countries have a big arch because the hospitals were too loaded or the amount of conducted covid 19 tests was not sufficient. Other countries were better at handling the starting phase. From 2021 to 2022 the line was shallower. At the beginning of 2022 the line is again shallower maybe because the first vaccine was used.
+
+## Course of the Case fatality rate (CFR) in the first two waves in year 2020
+
+At the next step we analyze the first phase deeper. We look at the top 10 countries who have the highest CRF in the first phase.
+
+```{r}
+covid_cfr_2020 <- covid_combined %>%
+  rename(
+    Country = `Country/Region`,
+    confirmed = cases.x,
+    deaths = cases.y
+  ) %>%
+  # Restrict to the year 2020
+  filter(date <= as.Date("2020-12-31")) %>%
+  # A minimum of 1000 cases is required
+  filter(confirmed >= 1000) %>%
+  # Calculate the CFR
+  mutate(cfr = (deaths / confirmed) * 100)
+```
+
+```{r}
+# Identifying the top 10 countries
+top_15_countries_2020 <- covid_cfr_2020 %>%
+  filter(date == as.Date("2020-12-31")) %>%
+  filter(confirmed >= 10000) %>%
+  slice_max(order_by = cfr, n = 10) %>%
+  pull(Country)
+```
+
+```{r}
+plot_trend_2020 <- covid_cfr_2020 %>%
+  filter(Country %in% top_15_countries_2020 | Country %in% "Italy") %>%
+  ggplot(aes(x = date, y = cfr, color = Country)) +
+  geom_line(linewidth = 1.2) +
+  scale_y_continuous(labels = function(x) paste0(x, "%"), limits = c(0, 16)) + 
+  scale_x_date(date_labels = "%b %Y", date_breaks = "2 months") +
+  labs(
+    title = "Course of the Case fatality rate (CFR) in year 2020",
+    subtitle = "Focus on the first and second wave (Data to 31.12.2020, Minimum of 1000 cases)",
+    x = "Space of time (Month/Year)",
+    y = "CFR (%)",
+    color = "Country",
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 11, color = "gray30")
+  )
+
+print(plot_trend_2020)
+```
+
+One can see that there are countries which have an similar course like Italy in the first phase.
+
+```{r}
+latest_date <- max(covid_cfr_2020$date)
+
+plot_bar <- covid_cfr %>%
+  # Filtering the top 20
+  filter(date == latest_date) %>%
+  slice_max(order_by = cfr, n = 20) %>%
+  # Sorting based on the CFR value
+  ggplot(aes(x = reorder(Country, cfr), y = cfr)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() + 
+  labs(
+    title = paste("Top 20 countries with the highest \nCFR (Time:", latest_date, ")"),
+    x = "Country",
+    y = "CFR (%)",
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16)
+  )
+
+print(plot_bar)
+```
+
+In this diagram one can see that Italy is on place 18. There are many countries from Africa and South America. Conspicuous is that China and the United Kingdom are also in the top 20.
+
+## Fourier Transform
+
+At next the Fourier transform is conducted. An idealized graph is created that can be used for smoothing noise for example to estimate a value if there is no measurement for this day or a value is higher because the cases from the last day are also added to one day. The graph is than written as an equation an can be used for calculations or can be extended to use it as a prediction model.
+
+```{r}
+# Filter the data for Italy in the year 2020
+italy_data <- covid_combined %>%
+  rename(
+    Country = `Country/Region`,
+    confirmed = cases.x,
+    deaths = cases.y
+  ) %>%
+  filter(Country == "Italy") %>%
+  filter(date <= as.Date("2020-12-31")) %>%
+  # We just append data points with a minimum of 1000 cases 
+  filter(confirmed >= 1000) %>%
+  mutate(cfr = (deaths / confirmed) * 100) %>%
+  arrange(date)
+
+# Picking the timeline vector
+y <- italy_data$cfr
+n <- length(y)
+
+# This variable contains the complex numbers for amplitudes and phases
+y_fft <- fft(y)
+
+# Here the signal is reconstructed with k frequencies
+reconstruct_fourier <- function(fft_coeffs, k) {
+  n_coeffs <- length(fft_coeffs)
+  filtered_coeffs <- rep(0, n_coeffs)
+  
+  if (k > 0) {
+    # We keep the frequencies of the first halve
+    filtered_coeffs[1:k] <- fft_coeffs[1:k]
+    
+    # We mirror the frequencies in the second halve
+    if (k > 1) {
+      end_start <- n_coeffs - k + 2
+      filtered_coeffs[end_start:n_coeffs] <- fft_coeffs[end_start:n_coeffs]
+    }
+  }
+  
+  # Inverse Fourier-Transformation is conducted and divided with the amount of data points 
+  reconstructed_complex <- fft(filtered_coeffs, inverse = TRUE) / n_coeffs
+
+  return(Re(reconstructed_complex))
+}
+
+# We calculate for different counts k of frequencies
+italy_fourier <- italy_data %>%
+  mutate(
+    fourier_k2 = reconstruct_fourier(y_fft, 2),
+    fourier_k4 = reconstruct_fourier(y_fft, 4),
+    fourier_k8 = reconstruct_fourier(y_fft, 8)
+  )
+
+# Forming the data into the long-format
+plot_data <- italy_fourier %>%
+  select(date, cfr, fourier_k2, fourier_k4, fourier_k8) %>%
+  pivot_longer(
+    cols = -date,
+    names_to = "Model",
+    values_to = "Value"
+  ) %>%
+  mutate(Model = case_when(
+    Model == "cfr" ~ "Real CFR-Curve (Italy 2020)",
+    Model == "fourier_k2" ~ "k = 2",
+    Model == "fourier_k4" ~ "k = 4",
+    Model == "fourier_k8" ~ "k = 8"
+  )) %>%
+  mutate(Model = factor(Model, levels = c(
+    "Real CFR-Curve (Italy 2020)",
+    "k = 2",
+    "k = 4",
+    "k = 8"
+  )))
+
+# Here the graph becomes visualized
+ggplot(plot_data, aes(x = date, y = Value, color = Model, linetype = Model)) +
+  geom_line(aes(linewidth = Model == "Real CFR-Curve (Italy 2020)")) +
+  scale_linewidth_manual(
+    values = c("TRUE" = 1.5, "FALSE" = 1.0),
+    guide = "none"
+  ) +
+  
+  # The real Data becomes a black, dashed line the approximations become a colored solid line. 
+  scale_linetype_manual(values = c(
+    "Real CFR-Curve (Italy 2020)" = "dashed",
+    "k = 2" = "solid",
+    "k = 4" = "solid",
+    "k = 8" = "solid"
+  )) +
+  
+  # Here the color palette is created
+  scale_color_manual(values = c(
+    "Real CFR-Curve (Italy 2020)" = "#2c3e50", 
+    "k = 2" = "#e74c3c",
+    "k = 4" = "#3498db",
+    "k = 8" = "#2ecc71"
+  )) +
+  
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "2 months") +
+  
+  labs(
+    title = "Fourier-Approximation of the COVID-19 Italy-arch (2020)",
+    x = "Date",
+    y = "Case fatality rate (CFR)",
+    color = "Model Configuration",
+    linetype = "Model Configuration",
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    legend.box = "vertical",
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 11, color = "gray30"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+The approximation with two frequencies (k = 2) is very smooth but maps the original graph not well. With k = 4 the arch is already reproduces well. With k = 8 frequencies already smaller fluctuations are mapped.
