@@ -1,0 +1,120 @@
+---
+title: "Analyzing the Impact of Victim Age on Survival Rates in New York City Shooting Incidents"
+date: "2026-05-05"
+output: pdf_document
+---
+
+We want to analyze whether older people are more likely to die in shootings in NYC. We first analyze how much shooting victims in different age groups are involved. After that we compare the death rates in each age group. To evaluate whether the distribution in death rates is meaningful, we make a Chi-Square Test.
+
+## Number of shootings by age group of victims
+
+The record of NYPD shootings is loaded with the URL. The data is then cleaned and the typing error '1022' and missing values, UNKNOWN, NA are filtered out from the VIC_AGE_GROUP variable. Than the number of cases (Victim_Count) and the percentages are calculated for each age group.
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lsr)
+```
+
+```{r}
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+nypd_data <- read_csv(url, show_col_types = FALSE)
+```
+
+```{r}
+victim_age_stats <- nypd_data %>%
+filter(!VIC_AGE_GROUP %in% c("1022", "UNKNOWN") & !is.na(VIC_AGE_GROUP)) %>%
+  count(VIC_AGE_GROUP, name = "Victim_Count") %>%
+  mutate(Percentage = (Victim_Count / sum(Victim_Count)) * 100)
+
+print(victim_age_stats)
+```
+
+```{r}
+ggplot(victim_age_stats, aes(x = VIC_AGE_GROUP, y = Victim_Count, fill = VIC_AGE_GROUP)) +
+  geom_col(show.legend = FALSE, color = "black", alpha = 0.8) +
+  geom_text(aes(label = paste0(Victim_Count, "\n(", round(Percentage, 1), "%)")), 
+            vjust = -0.3, size = 3.5, fontface = "bold") +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Number of NYPD Shooting Victims by Age Group",
+    subtitle = "Historic Data (2006 - Present)",
+    x = "Victim Age Group",
+    y = "Number of Incidents",
+  ) +
+  ylim(0, max(victim_age_stats$Victim_Count) * 1.15)
+```
+
+The figure shows the distribution of shooting victims in NYC by age group. One can see that its very unbalanced distributed.
+
+A bias in the analysis comes from the unbalanced distribution of the number of cases in the age groups. The older group only includes 236 cases. Even a few unusual cases in this group can distort the percentage values. A bias could also occur because the classes \<18 and 65+ are described too imprecisely.
+
+## Death rate of victims age groups
+
+This section of code connects the age groups with the binary variable STATISTICAL_MURDER_FLAG (TRUE for murder and FALSE for survived). Grouping is used to calculate the cases for each combination of age and outcome. An important step is the normalization in each age group, where the portions of TRUE and FALSE in each age group add up to 100%. This enables the comparison of the death rate independent of the case numbers.
+
+```{r}
+percentage_stats <- nypd_data %>%
+  filter(!VIC_AGE_GROUP %in% c("1022", "UNKNOWN") & !is.na(VIC_AGE_GROUP)) %>%
+  group_by(VIC_AGE_GROUP, STATISTICAL_MURDER_FLAG) %>%
+  summarise(Count = n(), .groups = 'drop') %>%
+  group_by(VIC_AGE_GROUP) %>%
+  mutate(
+    Total_Incidents = sum(Count),
+    Percentage = (Count / Total_Incidents) * 100
+  ) %>%
+  ungroup()
+
+print(percentage_stats %>% select(VIC_AGE_GROUP, STATISTICAL_MURDER_FLAG, Percentage))
+```
+
+```{r}
+ggplot(percentage_stats, aes(x = VIC_AGE_GROUP, y = Percentage, fill = STATISTICAL_MURDER_FLAG)) +
+  geom_col(position = "fill", color = "black", alpha = 0.8, width = 0.6) +
+  geom_text(
+    aes(label = paste0(round(Percentage, 1), "%")),
+    position = position_fill(vjust = 0.5),
+    size = 4, 
+    fontface = "bold",
+    color = "white"
+  ) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(
+    values = c("FALSE" = "#2a9d8f", "TRUE" = "#e76f51"),
+    labels = c("Survived (FALSE)", "Murder (TRUE)")
+  ) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Outcome of Shootings by Victim Age Group",
+    subtitle = "Normalized comparison showing the death rate out of 100%",
+    x = "Victim Age Group",
+    y = "Percentage of Total Cases within Age Group",
+    fill = "Outcome",
+  )
+```
+
+This graphic shows the death rate from shootings within each age group. There is a linear trend in which the risk of dying because of gunshot injury increases with increasing age.
+
+## Chi-Square Test
+
+This code block calculates the evaluation of the trend. First, a contingency table is created that compares the cases and than the chi-square test is applied. This checks whether the differences in death rates in diagram 2 are random or based on a dependency.
+
+```{r}
+contingency_data <- nypd_data %>%
+  filter(!VIC_AGE_GROUP %in% c("1022", "UNKNOWN") & !is.na(VIC_AGE_GROUP))
+
+contingency_table <- table(contingency_data$VIC_AGE_GROUP, contingency_data$STATISTICAL_MURDER_FLAG)
+
+print("Contingency Table (Absolute Counts):")
+print(contingency_table)
+
+chi_test_result <- chisq.test(contingency_table)
+
+print("Chi-Square Test Results:")
+print(chi_test_result)
+
+cramers_v_result <- cramersV(contingency_table)
+print(paste("Cramers V:", round(cramers_v_result, 4)))
+```
+
+The test shows a strong association between the two variables (X² = 247.23, df = 4, p \< 0.001). Therefore, we can reject the null hypothesis of independence. To measure the practical strength of this association, Cramers V was calculated. The value (Cramers V = 0.0913) shows a significant but weak or moderate effect. This shows that while older victims have a higher probability of deadly outcomes, age is just one of many contributing factors to shooting mortality.
